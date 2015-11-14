@@ -1,0 +1,144 @@
+#! /usr/bin/python
+
+import logging
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+from scapy import all
+from scapy.all import *
+from sys import argv
+from lifx.header import *
+from lifx.messages.light import *
+
+# Conventions:
+# - duration: seconds, float
+
+def usage():
+    tool = os.path.basename(argv[0])
+    print 'Usage:', tool , "TYPE IP DURATION [arguments]\n"
+    print 'Turn Light On     :', tool, ' on     IP DURATION'
+    print 'Turn Light Off    :', tool, ' off    IP DURATION'
+    print 'Adjust Brightness :', tool, ' bright IP DURATION LEVEL'
+    print 'Set Color (RGB)   :', tool, ' rgb    IP DURATION RED GREEN BLUE'
+    print 'Set Color (HSV)   :', tool, ' hsv    IP DURATION HUE SATURATION BRIGHTNESS'
+    print 'Set Color (HEX)   :', tool, ' hex    IP DURATION HEX'
+    print "\nValue ranges:\n"
+    print ' DURATION               : 0 - ... (in seconds)'
+    print ' LEVEL                  : 0 - 100'
+    print ' RED, GREEN, BLUE       : 0 - 255'
+    print ' HUE                    : 0 - 360'
+    print ' SATURATION, BRIGHTNESS : 0 - 100'
+    print "\nEXAMPLES:\n"
+    print ' Turn light on immediately:'
+    print "\t", tool, "on 192.168.1.100 0\n"
+    print ' Gently fade light during 10 minutes:'
+    print "\t", tool, "off 192.168.1.100 600\n"
+    print ' Set Color of all bulbs to purple: (commands are equivalent)'
+    print "\t", tool, "rgb 192.168.1.255 0 153 0 255"
+    print "\t", tool, "hsv 192.168.1.255 0 276 100 100"
+    print "\t", tool, "hex 192.168.1.255 0 9900FF"
+    quit()
+
+try:
+    cmd_target = argv[1]
+except:
+    usage()
+
+bulb, duration = argv[2:4]
+duration_ms = int(float(duration) * 1000)
+
+def on():
+    packet = ( create_lifx_header(bulb, 117) /
+               Lifx_Payload_117_SetPower(level=65535, duration=duration_ms))
+    return packet
+
+def off():
+    packet = ( create_lifx_header(bulb, 117) /
+               Lifx_Payload_117_SetPower(level=0, duration=duration_ms))
+    return packet
+
+def validate_bright(level):
+    if level < 0 or level > 100:
+        sys.exit("Error: LEVEL must be in 0-100")
+
+def bright():
+    level = float(argv[4])
+    validate_bright(level)
+    bright = int(level * 65535.0 / 100.0)
+    packet = ( create_lifx_header(bulb, 102) /
+               Lifx_Payload_102_SetColor(
+                   brightness=bright,
+                   duration=duration_ms,
+                   hue=0))
+    return packet
+
+def validate_rgb(red, green, blue):
+    if red < 0 or red > 255:
+        sys.exit("Error: RED must be in 0-255")
+    if green < 0 or green > 255:
+        sys.exit("Error: GREEN must be in 0-255")
+    if blue < 0 or blue > 255:
+        sys.exit("Error: BLUE must be in 0-255")
+
+def set_rgb():
+    red   = int(argv[4])
+    green = int(argv[5])
+    blue  = int(argv[6])
+    validate_rgb(red, green, blue)
+    (h, s, v) = colorsys.rgb_to_hsv(red, green, blue)
+    hue = int(h * 65535)
+    sat = int(s * 65535)
+    bri = int(v *   257) # 65535/255
+    packet = ( create_lifx_header(bulb, 102) /
+               Lifx_Payload_102_SetColor(
+                   duration=duration_ms,
+                   brightness=bri,
+                   hue=hue,
+                   saturation=sat))
+    return packet
+
+def validate_hsv(hue, saturation, brightness):
+    if hue < 0 or hue > 360:
+        sys.exit("Error: HUE must be in 0-360")
+    if saturation < 0 or saturation > 100:
+        sys.exit("Error: SATURATION must be in 0-100")
+    if brightness < 0 or brightness > 100:
+        sys.exit("Error: BRIGHTNESS must be in 0-100")
+
+def set_hsv():
+    hue         = int(argv[4])
+    saturation  = int(argv[5])
+    brightness  = int(argv[6])
+    validate_rgb(hue, saturation, brightness)
+    packet = ( create_lifx_header(bulb, 102) /
+               Lifx_Payload_102_SetColor(
+                   duration=duration_ms,
+                   brightness=bright,
+                   hue=hue,
+                   saturation=saturation))
+    return packet
+
+def set_hex():
+    hex = argv[4]
+    (red, green, blue) = struct.unpack('BBB',hex.decode('hex'))
+    (h, s, v) = colorsys.rgb_to_hsv(red, green, blue)
+    hue = int(h * 65535)
+    sat = int(s * 65535)
+    bri = int(v *   257) # 65535/255
+    packet = ( create_lifx_header(bulb, 102) /
+               Lifx_Payload_102_SetColor(
+                   duration=duration_ms,
+                   brightness=bri,
+                   hue=hue,
+                   saturation=sat))
+    return packet
+
+functions = {
+              'on'     : on,
+              'off'    : off,
+              'bright' : bright,
+              'rgb'    : set_rgb,
+              'hsv'    : set_hsv,
+              'hex'    : set_hex,
+            }
+
+packet = functions[cmd_target]()
+send(packet, verbose=0)
